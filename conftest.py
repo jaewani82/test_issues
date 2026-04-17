@@ -1,52 +1,114 @@
 import os
 import requests
 
-# GitHub Issues 자동 등록 설정
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")   # GitHub Actions에서 자동 주입됨
-GITHUB_REPO  = os.getenv("GITHUB_REPO")    # 예: "jaewani82/test_issues"
+# GitHub Actions에서 자동 주입되는 환경변수
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_REPO  = os.getenv("GITHUB_REPO")
 
-def pytest_runtest_logreport(report):
+HEADERS = {
+    "Authorization": f"Bearer {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github+json",
+}
+
+
+def find_open_issue(tc_name: str) -> int | None:
     """
-    pytest 훅: 각 TC 실행 결과가 나올 때마다 호출된다.
-    call 단계에서 FAILED면 GitHub Issue를 자동 등록한다.
+    제목에 tc_name이 포함된 열린 이슈를 검색해 issue number를 반환한다.
+    없으면 None 반환.
+    PASS 시 기존 이슈를 닫기 위해 사용한다.
     """
-    # 'call' 단계만 처리 (setup/teardown 제외), 로컬 실행 시엔 토큰 없으므로 무시
-    if report.when != "call" or not report.failed:
-        return
     if not GITHUB_TOKEN or not GITHUB_REPO:
+        return None
+
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/issues"
+    # state=open: 열린 이슈만 검색
+    resp = requests.get(url, headers=HEADERS, params={"state": "open"}, timeout=10)
+    if resp.status_code != 200:
+        return None
+
+    for issue in resp.json():
+        # [FAIL] tc_name 형태의 제목으로 매칭
+        if f"[FAIL] {tc_name}" in issue.get("title", ""):
+            return issue["number"]
+    return None
+
+
+def close_issue(issue_number: int, tc_name: str):
+    """
+    issue_number에 해당하는 이슈를 PASS 댓글과 함께 자동으로 닫는다.
+    """
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/issues/{issue_number}"
+
+    # 댓글로 PASS 기록 남기기
+    comment_url = f"{url}/comments"
+    requests.post(
+        comment_url,
+        headers=HEADERS,
+        json={"body": f"✅ **PASS** — `{tc_name}` 재실행에서 통과. 자동으로 이슈를 닫습니다."},
+        timeout=10,
+    )
+
+    # 이슈 Close
+    resp = requests.patch(url, headers=HEADERS, json={"state": "closed"}, timeout=10)
+    if resp.status_code == 200:
+        print(f"\n[이슈 자동 Close] #{issue_number} {tc_name}")
+    else:
+        print(f"\n[이슈 Close 실패] {resp.status_code} {resp.text}")
+
+
+def open_issue(tc_name: str, report):
+    """
+    FAIL한 TC를 GitHub Issues에 자동 등록한다.
+    동일 TC 이슈가 이미 열려있으면 중복 등록하지 않는다.
+    """
+    # 이미 열린 이슈가 있으면 중복 등록 방지
+    if find_open_issue(tc_name):
+        print(f"\n[이슈 중복 방지] {tc_name} 이슈가 이미 존재함")
         return
 
-    # TC 이름에서 사이트명과 번호 추출 (예: test_solarteq_all.py::test_TC005_calculator)
-    tc_name = report.nodeid.split("::")[-1]
-
-    # 실패 원인 (트레이스백) 추출
     longrepr = str(report.longrepr) if report.longrepr else "원인 불명"
-    # 너무 길면 잘라냄 (GitHub Issues 본문 제한 대비)
     if len(longrepr) > 2000:
         longrepr = longrepr[:2000] + "\n...(생략)"
 
-    # 이슈 제목과 본문 구성
-    title = f"[FAIL] {tc_name}"
-    body  = (
-        f"## 실패한 테스트\n`{report.nodeid}`\n\n"
-        f"## 실패 원인\n```\n{longrepr}\n```\n\n"
-        f"---\n*pytest E2E 자동 등록*"
-    )
-
-    # GitHub Issues API 호출
     url = f"https://api.github.com/repos/{GITHUB_REPO}/issues"
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github+json",
-    }
     payload = {
-        "title": title,
-        "body": body,
-        "labels": ["bug", "automated-test"],  # 이슈에 라벨 자동 부착
+        "title": f"[FAIL] {tc_name}",
+        "body": (
+            f"## 실패한 테스트\n`{report.nodeid}`\n\n"
+            f"## 실패 원인\n```\n{longrepr}\n```\n\n"
+            f"---\n*pytest E2E 자동 등록*"
+        ),
+        "labels": ["bug", "automated-test"],
     }
 
-    resp = requests.post(url, json=payload, headers=headers, timeout=10)
+    resp = requests.post(url, headers=HEADERS, json=payload, timeout=10)
     if resp.status_code == 201:
         print(f"\n[이슈 등록 완료] {resp.json().get('html_url')}")
     else:
         print(f"\n[이슈 등록 실패] {resp.status_code} {resp.text}")
+
+
+def pytest_runtest_logreport(report):
+    """
+    pytest 훅: 각 TC 실행 결과가 나올 때마다 호출된다.
+
+    FAIL → 이슈 자동 등록 (중복 방지)
+    PASS → 기존 열린 이슈 자동 Close
+    """
+    # call 단계만 처리 (setup/teardown 제외)
+    if report.when != "call":
+        return
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return
+
+    # TC 이름 추출 (예: test_TC005_calculator_modal_open[chromium])
+    tc_name = report.nodeid.split("::")[-1]
+
+    if report.failed:
+        open_issue(tc_name, report)
+
+    elif report.passed:
+        # PASS 시 동일 TC의 열린 이슈가 있으면 자동 Close
+        issue_number = find_open_issue(tc_name)
+        if issue_number:
+            close_issue(issue_number, tc_name)
