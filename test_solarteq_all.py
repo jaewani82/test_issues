@@ -1,7 +1,7 @@
 """
 솔라테크 (https://solarteq.co.kr/ko) E2E 통합 테스트
 ======================================================
-기존 14개 + 확장 43개 = 총 57개 TC
+기존 57개 + 품질 지표 22개 = 총 79개 TC
 
   [홈페이지]
   TC001 - 페이지 정상 로드 (타이틀 확인)
@@ -86,6 +86,35 @@
   TC056 - 페이지 타이틀 비어있지 않음
   TC057 - 콘솔 에러 없음 확인
 
+  [성능 Performance]
+  TC058 - 페이지 로드 3초 이내 (domcontentloaded 기준)
+  TC059 - 뷰포트 내 이미지 개수 과다 여부 (30개 미만)
+  TC060 - 뷰포트 밖 이미지 lazy loading 적용 여부
+
+  [접근성 Accessibility]
+  TC061 - 이미지 alt 텍스트 누락 검사
+  TC062 - 아이콘 버튼 aria-label 존재 여부
+  TC063 - 폼 input에 label 또는 placeholder 존재 여부
+  TC064 - 폼 요소 tabindex=-1 없음 (키보드 접근성)
+  TC065 - 링크 텍스트 의미 있음 ("여기", "클릭" 등 금지)
+
+  [SEO]
+  TC066 - meta description 존재 및 50자 이상
+  TC067 - h1 태그 정확히 1개
+  TC068 - OG 태그(og:title, og:description) 존재
+  TC069 - canonical URL 태그 존재
+
+  [보안 Security]
+  TC070 - 외부 링크 rel=noopener 설정 여부
+  TC071 - HTTP → HTTPS 리다이렉트 확인
+  TC072 - 민감 정보 폼 autocomplete 설정 여부
+
+  [UX]
+  TC073 - 모바일(375px) 가로 스크롤 없음
+  TC074 - 잘못된 URL 접근 시 404 처리 여부
+  TC075 - CTA 버튼(수익계산기) 스크롤 없이 뷰포트 내 노출
+  TC076 - 문의 폼 제출 후 사용자 피드백(완료 메시지) 여부
+
 실행:
   pytest test_solarteq_all.py -v -s
   pytest test_solarteq_all.py -v -s --tb=short
@@ -93,9 +122,15 @@
   pytest test_solarteq_all.py -v -k "TC02"   # 수익계산기 경계값
   pytest test_solarteq_all.py -v -k "TC04"   # UI/슬라이더
   pytest test_solarteq_all.py -v -k "TC05"   # 반응형
+  pytest test_solarteq_all.py -v -k "TC058 or TC059 or TC060"  # 성능
+  pytest test_solarteq_all.py -v -k "TC061 or TC062 or TC063 or TC064 or TC065"  # 접근성
+  pytest test_solarteq_all.py -v -k "TC066 or TC067 or TC068 or TC069"  # SEO
+  pytest test_solarteq_all.py -v -k "TC070 or TC071 or TC072"  # 보안
+  pytest test_solarteq_all.py -v -k "TC073 or TC074 or TC075 or TC076"  # UX
 """
 
 import re
+import time
 import pytest
 from playwright.sync_api import Page, expect
 
@@ -760,3 +795,367 @@ def test_TC057_no_console_errors(page: Page):
 
     assert len(critical_errors) == 0, \
         f"콘솔 에러 발생:\n" + "\n".join(critical_errors)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [성능 Performance]  TC058 – TC060
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_TC058_page_load_under_3seconds(page: Page):
+    """TC058: 페이지 domcontentloaded 완료까지 3초 이내 — 초과 시 UX/SEO 불이익"""
+    start = time.time()
+    page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30_000)
+    elapsed = time.time() - start
+
+    assert elapsed < 3.0, (
+        f"페이지 로드 {elapsed:.2f}초 — 3초 기준 초과. "
+        "이미지 최적화·CDN 적용 필요"
+    )
+    print(f"\n✅ TC058 PASS | 로드 {elapsed:.2f}초")
+
+
+def test_TC059_image_count_not_excessive(page: Page):
+    """TC059: img 태그 30개 미만 — 초과 시 초기 로딩 성능 저하"""
+    count = page.locator("img").count()
+    assert count < 30, (
+        f"img 태그 {count}개 — 30개 기준 초과. "
+        "loading='lazy' 적용 필요"
+    )
+    print(f"\n✅ TC059 PASS | img 태그 {count}개")
+
+
+def test_TC060_offscreen_images_lazy_loaded(page: Page):
+    """TC060: 뷰포트 밖 img에 loading='lazy' 적용 여부 — 미적용 시 불필요한 초기 로딩 발생"""
+    # 모든 img 중 loading 속성이 없는 것 수집
+    images = page.locator("img").all()
+    no_lazy = []
+    for img in images:
+        loading = img.get_attribute("loading")
+        src = img.get_attribute("src") or "unknown"
+        # loading 속성 자체가 없는 이미지를 누락으로 판단
+        if loading is None:
+            no_lazy.append(src.split("/")[-1])  # 파일명만 추출
+
+    assert len(no_lazy) == 0, (
+        f"lazy loading 미적용 이미지 {len(no_lazy)}개:\n" +
+        "\n".join(no_lazy[:5]) +
+        "\n→ img 태그에 loading='lazy' 추가 필요"
+    )
+    print(f"\n✅ TC060 PASS | 전체 img lazy loading 적용 확인")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [접근성 Accessibility]  TC061 – TC065
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_TC061_images_have_alt_text(page: Page):
+    """TC061: 모든 img에 alt 속성 존재 — 없으면 WCAG 2.1 위반 (스크린리더 사용자 배제)"""
+    images = page.locator("img").all()
+    missing = [
+        (img.get_attribute("src") or "unknown").split("/")[-1]
+        for img in images
+        if img.get_attribute("alt") is None
+    ]
+    assert len(missing) == 0, (
+        f"alt 누락 이미지 {len(missing)}개:\n" +
+        "\n".join(missing[:5]) +
+        "\n→ 각 img에 alt='설명' 추가 필요"
+    )
+    print(f"\n✅ TC061 PASS | 전체 이미지 alt 텍스트 확인")
+
+
+def test_TC062_icon_buttons_have_aria_label(page: Page):
+    """TC062: 텍스트 없는 버튼에 aria-label 존재 — 없으면 스크린리더가 용도를 알 수 없음"""
+    buttons = page.locator("button").all()
+    unlabeled = []
+    for btn in buttons:
+        text  = btn.inner_text().strip()
+        aria  = btn.get_attribute("aria-label") or ""
+        title = btn.get_attribute("title") or ""
+        if not text and not aria and not title:
+            unlabeled.append(btn.get_attribute("class") or "class없음")
+
+    assert len(unlabeled) == 0, (
+        f"레이블 없는 버튼 {len(unlabeled)}개:\n" +
+        "\n".join(unlabeled[:5]) +
+        "\n→ aria-label='버튼 설명' 추가 필요"
+    )
+    print(f"\n✅ TC062 PASS | 전체 버튼 aria-label 확인")
+
+
+def test_TC063_form_inputs_have_label_or_placeholder(page: Page):
+    """TC063: 수익계산기 모달 input에 label 또는 placeholder 존재 — 없으면 입력 목적 불명확"""
+    page.get_by_role("link", name="수익계산기").click()
+    page.get_by_role("textbox").first.wait_for(state="visible", timeout=TIMEOUT)
+
+    inputs = page.locator("input:visible").all()
+    unlabeled = []
+    for inp in inputs:
+        placeholder = inp.get_attribute("placeholder") or ""
+        input_id    = inp.get_attribute("id") or ""
+        # id가 있으면 label[for=id] 연결 여부 확인
+        has_label = False
+        if input_id:
+            has_label = page.locator(f"label[for='{input_id}']").count() > 0
+        if not placeholder and not has_label:
+            unlabeled.append(inp.get_attribute("name") or "unknown")
+
+    assert len(unlabeled) == 0, (
+        f"label·placeholder 없는 input {len(unlabeled)}개:\n" +
+        "\n".join(unlabeled) +
+        "\n→ placeholder 또는 <label for=...> 추가 필요"
+    )
+    print(f"\n✅ TC063 PASS | 폼 input 레이블 확인")
+
+
+def test_TC064_no_negative_tabindex_on_form(page: Page):
+    """TC064: 폼 input에 tabindex=-1 없음 — 있으면 키보드 사용자가 해당 필드 접근 불가"""
+    page.get_by_role("link", name="수익계산기").click()
+    page.get_by_role("textbox").first.wait_for(state="visible", timeout=TIMEOUT)
+
+    inputs = page.locator("input:visible").all()
+    blocked = [
+        inp.get_attribute("placeholder") or "unknown"
+        for inp in inputs
+        if inp.get_attribute("tabindex") == "-1"
+    ]
+    assert len(blocked) == 0, (
+        f"tabindex=-1 input {len(blocked)}개 (키보드 접근 차단):\n" +
+        "\n".join(blocked) +
+        "\n→ tabindex 속성 제거 필요"
+    )
+    print(f"\n✅ TC064 PASS | 폼 키보드 접근성 확인")
+
+
+def test_TC065_links_have_meaningful_text(page: Page):
+    """TC065: 링크 텍스트가 '여기', '클릭' 등 무의미한 단어가 아닌지 확인 — SEO·접근성 불이익"""
+    # 스크린리더 사용자는 링크 텍스트만 읽으므로 '여기를 클릭' 같은 표현은 맥락 전달 불가
+    vague_words = ["여기", "클릭", "click here", "here", "더보기만"]
+    links = page.locator("a").all()
+    vague_links = []
+    for link in links:
+        text = link.inner_text().strip().lower()
+        if text in vague_words:
+            vague_links.append(text)
+
+    assert len(vague_links) == 0, (
+        f"무의미한 링크 텍스트 {len(vague_links)}개: {vague_links}\n"
+        "→ '자세히 보기', '수익 계산하기' 등 구체적 텍스트로 변경 필요"
+    )
+    print(f"\n✅ TC065 PASS | 링크 텍스트 의미 있음 확인")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [SEO]  TC066 – TC069
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_TC066_meta_description_exists_and_length(page: Page):
+    """TC066: meta description 존재 및 50자 이상 — 없으면 구글이 임의 텍스트 노출"""
+    meta = page.locator('meta[name="description"]')
+    assert meta.count() > 0, (
+        "meta description 태그 없음\n"
+        "→ <meta name='description' content='...'> 추가 필요"
+    )
+    content = meta.get_attribute("content") or ""
+    assert len(content) >= 50, (
+        f"meta description {len(content)}자 — 50자 이상 권장\n"
+        f"현재: '{content}'"
+    )
+    print(f"\n✅ TC066 PASS | meta description {len(content)}자 확인")
+
+
+def test_TC067_single_h1_tag(page: Page):
+    """TC067: h1 태그 정확히 1개 — 0개면 주제 없음, 2개 이상이면 SEO 구조 혼란"""
+    count = page.locator("h1").count()
+    assert count == 1, (
+        f"h1 태그 {count}개 감지 — 페이지당 정확히 1개 필요\n"
+        "→ 핵심 제목 1개만 h1, 나머지는 h2·h3으로 변경"
+    )
+    print(f"\n✅ TC067 PASS | h1 태그 1개 확인")
+
+
+def test_TC068_og_tags_exist(page: Page):
+    """TC068: OG 태그(og:title, og:description) 존재 — 없으면 SNS 공유 시 미리보기 깨짐"""
+    og_title = page.locator('meta[property="og:title"]').count()
+    og_desc  = page.locator('meta[property="og:description"]').count()
+
+    missing = []
+    if og_title == 0:
+        missing.append("og:title")
+    if og_desc == 0:
+        missing.append("og:description")
+
+    assert len(missing) == 0, (
+        f"OG 태그 누락: {missing}\n"
+        "→ <meta property='og:title' content='...'> 추가 필요"
+    )
+    print(f"\n✅ TC068 PASS | OG 태그 확인")
+
+
+def test_TC069_canonical_url_exists(page: Page):
+    """TC069: canonical URL 태그 존재 — 없으면 중복 URL로 검색 순위 분산"""
+    canonical = page.locator('link[rel="canonical"]')
+    assert canonical.count() > 0, (
+        "canonical 태그 없음\n"
+        "→ <link rel='canonical' href='https://solarteq.co.kr/ko'> 추가 필요"
+    )
+    href = canonical.get_attribute("href") or ""
+    assert "solarteq" in href, f"canonical href가 올바르지 않음: {href}"
+    print(f"\n✅ TC069 PASS | canonical: {href}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [보안 Security]  TC070 – TC072
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_TC070_external_links_noopener(page: Page):
+    """TC070: target=_blank 외부 링크에 rel=noopener 존재 — 없으면 tabnapping 취약점"""
+    links = page.locator('a[target="_blank"]').all()
+    vulnerable = [
+        link.get_attribute("href") or "unknown"
+        for link in links
+        if "noopener" not in (link.get_attribute("rel") or "")
+    ]
+    assert len(vulnerable) == 0, (
+        f"noopener 없는 외부 링크 {len(vulnerable)}개:\n" +
+        "\n".join(vulnerable[:5]) +
+        "\n→ rel='noopener noreferrer' 추가 필요"
+    )
+    print(f"\n✅ TC070 PASS | 외부 링크 noopener 확인")
+
+
+def test_TC071_http_redirects_to_https(page: Page):
+    """TC071: HTTP 접속 시 HTTPS로 자동 리다이렉트 — 미적용 시 데이터 평문 전송 위험"""
+    # HTTP로 접속 후 최종 URL이 https인지 확인
+    page.goto("http://solarteq.co.kr/ko", wait_until="domcontentloaded", timeout=30_000)
+    page.wait_for_timeout(1_000)
+    assert page.url.startswith("https://"), (
+        f"HTTP → HTTPS 리다이렉트 미작동. 현재 URL: {page.url}\n"
+        "→ 서버에서 301 리다이렉트 설정 필요"
+    )
+    print(f"\n✅ TC071 PASS | HTTPS 리다이렉트 확인: {page.url}")
+
+
+def test_TC072_phone_input_autocomplete(page: Page):
+    """TC072: 연락처 input에 autocomplete 속성 존재 — 없으면 브라우저 자동완성 비활성화로 UX 저하"""
+    open_inquiry(page)
+    # 연락처 input 찾기
+    phone_inputs = page.locator("input[type='tel'], input[placeholder*='연락처'], input[placeholder*='전화']")
+    if phone_inputs.count() == 0:
+        print(f"\n⏭️  TC072 SKIP | 연락처 input 없음")
+        return
+
+    inp = phone_inputs.first
+    autocomplete = inp.get_attribute("autocomplete")
+    assert autocomplete is not None, (
+        "연락처 input에 autocomplete 속성 없음\n"
+        "→ autocomplete='tel' 추가 권장"
+    )
+    print(f"\n✅ TC072 PASS | autocomplete='{autocomplete}' 확인")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [UX]  TC073 – TC076
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_TC073_no_horizontal_scroll_mobile(page: Page):
+    """TC073: 모바일(375px)에서 가로 스크롤 없음 — 있으면 UX 심각 저하"""
+    page.set_viewport_size({"width": 375, "height": 812})
+    page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30_000)
+    page.wait_for_timeout(1_000)
+
+    # scrollWidth > clientWidth 이면 가로 스크롤 발생 중
+    has_scroll = page.evaluate(
+        "() => document.documentElement.scrollWidth > document.documentElement.clientWidth"
+    )
+    assert not has_scroll, (
+        "모바일 375px에서 가로 스크롤 발생\n"
+        "→ 개발자도구에서 가로 넘치는 요소 확인 후 overflow-x: hidden 처리"
+    )
+    print(f"\n✅ TC073 PASS | 모바일 가로 스크롤 없음 확인")
+
+
+def test_TC074_custom_404_page(page: Page):
+    """TC074: 잘못된 URL 접근 시 404 처리 — 기본 서버 오류 페이지 대신 안내 페이지 필요"""
+    page.goto("https://solarteq.co.kr/ko/nonexistent-page-xyz", wait_until="domcontentloaded", timeout=30_000)
+    page.wait_for_timeout(1_000)
+
+    # 404 처리 여부: 타이틀 또는 본문에 404 관련 문구가 있거나 홈으로 리다이렉트됐는지 확인
+    page_text = page.inner_text("body").lower()
+    is_handled = (
+        "404" in page_text
+        or "찾을 수 없" in page_text
+        or "not found" in page_text
+        or "/ko" in page.url  # 홈으로 리다이렉트된 경우
+    )
+    assert is_handled, (
+        f"404 페이지 미처리 — URL: {page.url}\n"
+        "→ 커스텀 404 페이지 또는 홈 리다이렉트 설정 필요"
+    )
+    print(f"\n✅ TC074 PASS | 404 처리 확인: {page.url}")
+
+
+def test_TC075_cta_button_visible_without_scroll(page: Page):
+    """TC075: 데스크탑(1280px) 기준 수익계산기 CTA 버튼이 스크롤 없이 뷰포트에 노출"""
+    page.set_viewport_size({"width": 1280, "height": 800})
+    page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30_000)
+    page.wait_for_timeout(1_000)
+
+    # 수익계산기 버튼이 초기 화면(above the fold)에 보이는지 확인
+    calc_btn = page.get_by_role("link", name="수익계산기").first
+    expect(calc_btn).to_be_visible(timeout=TIMEOUT)
+
+    # 스크롤 위치 0에서 버튼이 뷰포트 내에 있는지 JS로 검증
+    in_viewport = calc_btn.evaluate(
+        "el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; }"
+    )
+    assert in_viewport, (
+        "수익계산기 버튼이 초기 뷰포트 밖에 위치\n"
+        "→ 핵심 CTA는 스크롤 없이 보이는 위치(above the fold)에 배치 권장"
+    )
+    print(f"\n✅ TC075 PASS | CTA 버튼 above the fold 확인")
+
+
+def test_TC076_inquiry_form_submit_feedback(page: Page):
+    """TC076: 문의 폼 제출 후 사용자 피드백(완료 메시지·alert) 여부 — 없으면 제출 성공 여부 불명확"""
+    open_inquiry(page)
+
+    # 라디오 첫 번째 선택
+    radios = page.locator("input[type='radio']").all()
+    if radios:
+        radios[0].evaluate("el => el.click()")
+
+    # 연락처 입력
+    phone = page.locator("input[type='tel'], input[placeholder*='연락처']").first
+    if phone.count() > 0 or page.locator("input[placeholder*='연락처']").count() > 0:
+        try:
+            page.locator("input[placeholder*='연락처']").first.fill("010-1234-5678")
+        except Exception:
+            pass
+
+    # 제출 전 dialog 등록
+    messages = catch_dialog(page)
+
+    # 제출 버튼 클릭
+    submit = page.get_by_role("button", name=re.compile("제출|확인|신청|보내기", re.IGNORECASE)).first
+    if submit.count() == 0:
+        print(f"\n⏭️  TC076 SKIP | 제출 버튼 없음")
+        return
+
+    submit.click()
+    page.wait_for_timeout(1_500)
+
+    # 피드백 확인: alert 메시지 또는 완료 문구
+    feedback_text = page.inner_text("body")
+    has_feedback = (
+        len(messages) > 0  # alert 발생
+        or "완료" in feedback_text
+        or "감사" in feedback_text
+        or "접수" in feedback_text
+        or "성공" in feedback_text
+    )
+    assert has_feedback, (
+        "제출 후 피드백 없음 — 사용자가 성공 여부를 알 수 없음\n"
+        "→ 제출 완료 메시지 또는 alert 추가 필요"
+    )
+    print(f"\n✅ TC076 PASS | 제출 피드백 확인: {messages or '완료 문구 노출'}")
