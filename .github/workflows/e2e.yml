@@ -13,6 +13,8 @@ jobs:
     # Issues 자동 등록을 위해 쓰기 권한 명시 필요
     permissions:
       issues: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       # 1. 레포 코드 체크아웃
@@ -55,7 +57,80 @@ jobs:
             2>&1 | tee test_results_quality.txt
         continue-on-error: true
 
-      # 5. 결과 파일을 Artifact로 저장 (GitHub Actions 탭에서 다운로드 가능)
+      # 5. FAIL한 TC를 GitHub Issue로 자동 등록
+      - name: Create GitHub Issues for failures
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: |
+          python - <<'EOF'
+          import os, re, requests
+
+          token = os.environ["GITHUB_TOKEN"]
+          repo  = os.environ["GITHUB_REPO"]
+          headers = {
+              "Authorization": f"token {token}",
+              "Accept": "application/vnd.github+json"
+          }
+
+          # 두 결과 파일 합쳐서 FAILED 라인 파싱
+          result_files = ["test_results_functional.txt", "test_results_quality.txt"]
+          failed = []
+          for path in result_files:
+              if not os.path.exists(path):
+                  continue
+              for line in open(path):
+                  # "FAILED test_solarteq_all.py::test_TC079_...  - AssertionError: ..."
+                  m = re.match(r"FAILED\s+(\S+)\s+-\s+(.+)", line.strip())
+                  if m:
+                      failed.append({"test": m.group(1), "reason": m.group(2)[:200]})
+
+          if not failed:
+              print("FAIL 없음 — 이슈 등록 건너뜀")
+              exit(0)
+
+          # 기존 열린 이슈 목록 가져오기 (중복 등록 방지)
+          existing = requests.get(
+              f"https://api.github.com/repos/{repo}/issues",
+              params={"state": "open", "labels": "QA-FAIL", "per_page": 100},
+              headers=headers
+          ).json()
+          existing_titles = {i["title"] for i in existing if isinstance(i, dict)}
+
+          for item in failed:
+              tc = item["test"].split("::")[-1].replace("[chromium]", "").strip()
+              title = f"[QA FAIL] {tc}"
+
+              if title in existing_titles:
+                  print(f"이미 존재하는 이슈 건너뜀: {title}")
+                  continue
+
+              body = (
+                  f"## 실패 정보\n\n"
+                  f"| 항목 | 내용 |\n|------|------|\n"
+                  f"| 테스트 | `{item['test']}` |\n"
+                  f"| 브라우저 | Chromium |\n"
+                  f"| 실패 원인 | {item['reason']} |\n\n"
+                  f"## 재현 방법\n\n"
+                  f"```bash\n"
+                  f"pytest {item['test'].split('[')[0]} -v -s --override-ini=\"addopts=\"\n"
+                  f"```\n\n"
+                  f"## 조치 필요\n- [ ] 원인 분석 및 수정\n- [ ] 수정 후 재실행 확인\n"
+              )
+
+              res = requests.post(
+                  f"https://api.github.com/repos/{repo}/issues",
+                  json={"title": title, "body": body, "labels": ["QA-FAIL", "bug"]},
+                  headers=headers
+              )
+              if res.status_code == 201:
+                  print(f"이슈 생성: {title} → {res.json()['html_url']}")
+              else:
+                  print(f"이슈 생성 실패: {res.status_code} {res.text}")
+          EOF
+
+      # 6. 결과 파일을 Artifact로 저장 (GitHub Actions 탭에서 다운로드 가능)
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
