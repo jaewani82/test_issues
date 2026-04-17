@@ -27,19 +27,30 @@ jobs:
           pip install -r requirements.txt
           playwright install chromium --with-deps
 
-      # 4. 테스트 실행
-      #    --headless: CI 환경에는 모니터가 없으므로 headless 강제
+      # 4-1. 기능 테스트 실행 (57개 TC — 동작 여부 검증)
+      #    --override-ini="addopts=": pytest.ini의 --headed 옵션을 CI에서 무효화
       #    --tb=short: 실패 시 짧은 트레이스백만 출력
-      #    -v: 각 TC 이름과 결과를 줄마다 출력
-      - name: Run Playwright tests
+      - name: Run functional tests
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # FAIL 시 이슈 등록에 사용
           GITHUB_REPO: ${{ github.repository }}       # jaewani82/test_issues
         run: |
           pytest test_solarteq_all.py -v --tb=short \
             --override-ini="addopts=" \
-            2>&1 | tee test_results.txt
+            2>&1 | tee test_results_functional.txt
         continue-on-error: true  # 테스트 실패해도 다음 step 계속 실행
+
+      # 4-2. 품질 지표 테스트 실행 (10개 QA — 성능·접근성·SEO·보안·UX 검증)
+      #    FAIL = 실제 개선이 필요한 품질 문제
+      - name: Run quality tests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: |
+          pytest test_solarteq_quality.py -v --tb=short \
+            --override-ini="addopts=" \
+            2>&1 | tee test_results_quality.txt
+        continue-on-error: true
 
       # 5. 결과 파일을 Artifact로 저장 (GitHub Actions 탭에서 다운로드 가능)
       - name: Upload test results
@@ -47,4 +58,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: test_results.txt
+          path: |
+            test_results_functional.txt
+            test_results_quality.txt

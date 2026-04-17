@@ -29,7 +29,9 @@
       "Bash(gh repo *)",
       "Bash(curl -s https://api.github.com/repos/jaewani82/test_issues)",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('full_name', d.get\\('message',''\\)\\)\\)\")",
-      "Bash(pip freeze *)"
+      "Bash(pip freeze *)",
+      "Bash(sed -i '' 's/QC00/QA00/g' /Users/solarteq_ax2/projects/test_playwright/test_solarteq_quality.py)",
+      "Bash(sed -i '' 's/def test_QC/def test_QA/g' /Users/solarteq_ax2/projects/test_playwright/test_solarteq_quality.py)"
     ]
   }
 }
