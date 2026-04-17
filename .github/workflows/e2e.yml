@@ -10,6 +10,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Issues 자동 등록을 위해 쓰기 권한 명시 필요
+    permissions:
+      issues: write
 
     steps:
       # 1. 레포 코드 체크아웃

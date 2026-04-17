@@ -78,7 +78,7 @@ def open_issue(tc_name: str, report):
             f"## 실패 원인\n```\n{longrepr}\n```\n\n"
             f"---\n*pytest E2E 자동 등록*"
         ),
-        "labels": ["bug", "automated-test"],
+        "labels": ["bug"],  # automated-test 라벨은 기본 생성 안 되므로 bug만 사용
     }
 
     resp = requests.post(url, headers=HEADERS, json=payload, timeout=10)
