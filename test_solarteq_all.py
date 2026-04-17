@@ -115,6 +115,13 @@
   TC075 - CTA 버튼(수익계산기) 스크롤 없이 뷰포트 내 노출
   TC076 - 문의 폼 제출 후 사용자 피드백(완료 메시지) 여부
 
+  [품질 향상 추가]
+  TC077 - 수익계산기 결과값 단위(kW·원) 형식 정합성 검증
+  TC078 - 헤더 링크 전체 href 존재 및 빈 링크 없음 확인
+  TC079 - 탭 키보드 포커스 순서 — 주요 인터랙티브 요소 접근 가능 여부
+  TC080 - 뒤로가기 후 수익계산기 재오픈 — 상태 초기화 확인
+  TC081 - 문의하기 연락처 입력값 유지 여부 (모달 재오픈 시 초기화)
+
 실행:
   pytest test_solarteq_all.py -v -s
   pytest test_solarteq_all.py -v -s --tb=short
@@ -127,6 +134,7 @@
   pytest test_solarteq_all.py -v -k "TC066 or TC067 or TC068 or TC069"  # SEO
   pytest test_solarteq_all.py -v -k "TC070 or TC071 or TC072"  # 보안
   pytest test_solarteq_all.py -v -k "TC073 or TC074 or TC075 or TC076"  # UX
+  pytest test_solarteq_all.py -v -k "TC077 or TC078 or TC079 or TC080 or TC081"  # 품질 향상
 """
 
 import re
@@ -1159,3 +1167,160 @@ def test_TC076_inquiry_form_submit_feedback(page: Page):
         "→ 제출 완료 메시지 또는 alert 추가 필요"
     )
     print(f"\n✅ TC076 PASS | 제출 피드백 확인: {messages or '완료 문구 노출'}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [품질 향상 추가]  TC077 – TC081
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_TC077_calculator_result_unit_format(page: Page):
+    """TC077: 300평 계산 결과에 kW·원 단위가 포함돼야 한다 — 단위 없는 숫자만 표시 시 사용자 혼란"""
+    page.get_by_role("link", name="수익계산기").click()
+    page.get_by_role("textbox").first.wait_for(state="visible", timeout=TIMEOUT)
+
+    tb = page.get_by_role("textbox").first
+    tb.click()
+    tb.fill("300")
+    page.get_by_role("button", name="계산하기").first.click()
+    page.wait_for_selector("text=임대료", timeout=TIMEOUT)
+
+    body_text = page.inner_text("body")
+
+    # kW 단위와 원 단위가 결과에 반드시 포함돼야 의미 있는 결과
+    assert "kW" in body_text, (
+        "결과에 kW 단위 없음 — 발전용량 단위 표기 누락\n"
+        "→ 결과 렌더링 시 단위 문자열 포함 필요"
+    )
+    assert "원" in body_text or "만" in body_text, (
+        "결과에 금액 단위(원·만) 없음 — 임대료·수익 단위 표기 누락\n"
+        "→ 금액 결과에 '원' 또는 '만원' 단위 추가 필요"
+    )
+    print(f"\n✅ TC077 PASS | 결과 단위(kW·원) 형식 정상 확인")
+
+
+def test_TC078_header_links_all_have_href(page: Page):
+    """TC078: 헤더 내 순수 네비게이션 링크에 유효한 href 존재 여부 확인
+    - 모달 트리거(수익계산기·문의하기)·언어 드롭다운은 JS 동작이므로 # href 허용
+    - href가 완전히 비어있는("") 경우만 실제 버그로 판정
+    """
+    header = page.locator("header")
+    links = header.locator("a").all()
+
+    assert len(links) > 0, "헤더에서 링크를 찾지 못했습니다."
+
+    # JS 트리거 목적으로 의도적으로 # 사용하는 요소 목록 (모달·드롭다운)
+    js_trigger_texts = {"수익계산기", "문의하기", "한국어", "english", "中文", "中文"}
+
+    truly_empty = []
+    for link in links:
+        href = (link.get_attribute("href") or "").strip()
+        text = link.inner_text().strip()
+
+        # JS 트리거 링크는 # 허용 → 제외
+        if text.lower() in {t.lower() for t in js_trigger_texts}:
+            continue
+
+        # href 속성 자체가 없거나 완전히 빈 문자열인 경우만 버그로 판정
+        if href == "":
+            truly_empty.append(text or "(텍스트 없음)")
+
+    assert len(truly_empty) == 0, (
+        f"href 완전 누락 헤더 링크 {len(truly_empty)}개: {truly_empty}\n"
+        "→ 각 링크에 올바른 href 경로 설정 필요"
+    )
+    print(f"\n✅ TC078 PASS | 헤더 링크 {len(links)}개 검사 완료 (JS 트리거 제외)")
+
+
+def test_TC079_keyboard_tab_reaches_calculator(page: Page):
+    """TC079: Tab 키만으로 수익계산기 버튼에 포커스 도달 가능 여부 — 마우스 없는 사용자 접근성
+    - 헤더에 스킵 네비게이션·숨은 요소가 많을 수 있어 최대 30회 Tab으로 검사
+    - 포커스 판정: innerText 또는 aria-label 기준
+    """
+    MAX_TABS = 30
+
+    focused_on_calc = False
+    tab_count = 0
+
+    for _ in range(MAX_TABS):
+        page.keyboard.press("Tab")
+        page.wait_for_timeout(80)
+        tab_count += 1
+
+        # innerText와 aria-label 모두 확인 (아이콘 버튼은 텍스트가 없을 수 있음)
+        focused_info = page.evaluate("""() => {
+            const el = document.activeElement;
+            return {
+                text: el?.innerText || '',
+                aria: el?.getAttribute('aria-label') || '',
+                tag:  el?.tagName || ''
+            }
+        }""")
+
+        text = focused_info.get("text", "") + focused_info.get("aria", "")
+        if "수익계산기" in text:
+            focused_on_calc = True
+            break
+
+    assert focused_on_calc, (
+        f"Tab {MAX_TABS}회 내에 수익계산기 버튼에 포커스 도달 불가\n"
+        "→ 수익계산기 링크에 tabindex='0' 추가 또는 DOM 순서 검토 필요\n"
+        "  (키보드 사용자는 마우스 없이 Tab만으로 탐색)"
+    )
+    print(f"\n✅ TC079 PASS | Tab {tab_count}회로 수익계산기 버튼 포커스 도달 확인")
+
+
+def test_TC080_calculator_state_reset_after_reload(page: Page):
+    """TC080: 페이지 재로드 후 수익계산기 재오픈 시 입력값이 초기화돼야 한다 — 이전 결과 잔류 방지"""
+    # 1차: 300평 계산
+    page.get_by_role("link", name="수익계산기").click()
+    page.get_by_role("textbox").first.wait_for(state="visible", timeout=TIMEOUT)
+    tb = page.get_by_role("textbox").first
+    tb.fill("300")
+    page.get_by_role("button", name="계산하기").first.click()
+    page.wait_for_timeout(1_000)
+
+    # 2차: 홈 재로드 후 재오픈
+    page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30_000)
+    page.wait_for_timeout(1_000)
+    page.get_by_role("link", name="수익계산기").click()
+    page.get_by_role("textbox").first.wait_for(state="visible", timeout=TIMEOUT)
+
+    # 입력창이 비어있거나 기본값이어야 함
+    current_value = page.get_by_role("textbox").first.input_value()
+    assert current_value in ("", "0", None), (
+        f"재오픈 시 입력값 잔류: '{current_value}'\n"
+        "→ 모달 닫힐 때 input 초기화 처리 필요"
+    )
+    print(f"\n✅ TC080 PASS | 수익계산기 재오픈 시 입력값 초기화 확인 (값: '{current_value}')")
+
+
+def test_TC081_inquiry_form_resets_on_reopen(page: Page):
+    """TC081: 문의하기 모달 닫고 재오픈 시 연락처 입력값이 초기화돼야 한다 — 개인정보 잔류 방지"""
+    # 1차 오픈: 연락처 입력
+    page.get_by_role("link", name="문의하기").first.click()
+    page.wait_for_selector("text=문의구분", timeout=TIMEOUT)
+
+    phone_input = page.locator("input[placeholder*='연락처'], input[type='tel']").first
+    if phone_input.count() == 0:
+        print(f"\n⏭️  TC081 SKIP | 연락처 input 없음")
+        return
+
+    phone_input.fill("010-9999-8888")
+    page.wait_for_timeout(500)
+
+    # 모달 닫기 (ESC 또는 닫기 버튼)
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(800)
+
+    # 2차 재오픈
+    page.get_by_role("link", name="문의하기").first.click()
+    page.wait_for_selector("text=문의구분", timeout=TIMEOUT)
+
+    phone_input_2 = page.locator("input[placeholder*='연락처'], input[type='tel']").first
+    value_after_reopen = phone_input_2.input_value()
+
+    assert value_after_reopen != "010-9999-8888", (
+        f"모달 재오픈 후 연락처 값 잔류: '{value_after_reopen}'\n"
+        "→ 모달 닫힐 때 폼 reset() 처리 필요 (개인정보 보호)"
+    )
+    print(f"\n✅ TC081 PASS | 문의하기 재오픈 시 연락처 초기화 확인 (값: '{value_after_reopen}')")
